@@ -94,14 +94,16 @@ Optional:
 
 ## About Sampling Rate and Statistical Confidence
 
-In large-scale data migration (e.g., 30 million records), sampling validation is both effective and reliable. Here's what the sampling rate means:
+Even a **1% sampling rate** is statistically powerful for datasets of this magnitude. Consider a migration of **30 million records**:
 
-Using the default sampling rate (100):
-- For 30 million records, approximately 300,000 will be validated
-- With a 95% confidence level, the margin of error is about ±0.2%
-- If sampling validation shows 99.9% accuracy, we can be 95% confident that the overall accuracy is between 99.7% and 100%
+| Aspect | 1 % Sampling (30 0 000 records → 300 000 samples) |
+|--------|---------------------------------------------------|
+| Absolute Sample Size | 300 000 is an extremely large sample—most academic studies rely on far fewer observations. |
+| Margin of Error (95 % CI) | ±0.18 %. If the sample shows **99 %** success, the true success rate is almost certainly between **98.82 %** and **99.18 %**. |
+| Ability to Detect Rare Issues | A defect rate of **0.1 %** still yields ≈ 300 error cases—enough for reliable detection and root-cause analysis. |
+| Practical Considerations | Migration defects tend to be **systematic**, not random. Systematic issues will surface even at low sampling rates. If 1 % passes, the likelihood of hidden systemic problems is extremely small. |
 
-This sample size is statistically significant while significantly reducing validation time and resource consumption.
+In short, a 1 % sample offers an excellent balance between cost and accuracy. You can always increase the sampling rate if deeper inspection is required.
 
 ## Monitoring Output
 
@@ -254,14 +256,16 @@ go build
 
 ## 關於抽樣率和統計可信度
 
-在大規模資料遷移中（例如 3000 萬筆資料），使用抽樣驗證是一個有效且可靠的方法。以下說明抽樣率的統計意義：
+即使僅 **1 % 抽樣率**，在此規模下依然具備極高的統計意義。以 **3,000 萬筆** 資料為例：
 
-假設使用預設的抽樣率（100）：
-- 在 3000 萬筆資料中，會驗證約 30 萬筆
-- 以 95% 信心水準計算，誤差範圍約為 ±0.2%
-- 這表示如果抽樣驗證顯示 99.9% 的準確率，我們可以有 95% 的信心說整體資料的準確率在 99.7% 到 100% 之間
+| 面向 | 1 % 抽樣（30 萬筆樣本） |
+|------|-------------------------|
+| 樣本絕對數量 | 30 萬屬於「極大樣本」，遠高於多數學術研究所需。 |
+| 誤差範圍（95 % 信賴區間） | 約 ±0.18 %。若樣本顯示 **99 %** 成功，真實比例幾乎可確定介於 **98.82 %** 與 **99.18 %** 之間。 |
+| 問題偵測能力 | 即使問題率僅 **0.1 %**，30 萬樣本中仍會出現 ≈ 300 筆錯誤，足以被偵測並分析。 |
+| 實務考量 | 遷移問題通常屬於 **系統性**，非隨機事件；若 1 % 抽樣皆正常，出現隱藏系統性問題的機率極低。 |
 
-這個抽樣規模已經足夠大，能夠提供統計學上顯著的結果，同時又能大幅減少驗證的時間和資源消耗。
+綜合而言，1 % 抽樣在成本效益與準確性之間取得了極佳平衡；若驗證過程發現異常，可隨時提高抽樣率以進一步深入分析。
 
 ## 監控輸出
 
