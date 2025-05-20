@@ -30,6 +30,7 @@ func main() {
 	clients, err := internal.NewDynamoDBClients(ctx, internal.ClientConfig{
 		SourceProfile: cmdFlags.SourceProfile,
 		TargetProfile: cmdFlags.TargetProfile,
+		StreamProfile: cmdFlags.StreamProfile,
 		Region:        cmdFlags.Region,
 	})
 	if err != nil {
@@ -63,6 +64,9 @@ func main() {
 			SampleRate:   cmdFlags.SampleRate,
 			PartitionKey: cmdFlags.PartitionKey,
 			SortKey:      cmdFlags.SortKey,
+			IteratorType: cmdFlags.IteratorType,
+			VerifyOn:     cmdFlags.VerifyOn,
+			Verbose:      cmdFlags.Verbose,
 		})
 		return
 	}
