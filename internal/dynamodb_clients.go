@@ -14,6 +14,7 @@ import (
 type ClientConfig struct {
 	SourceProfile string
 	TargetProfile string
+	StreamProfile string // Optional, defaults to TargetProfile
 	Region        string // Optional, defaults to ap-southeast-1
 }
 
@@ -31,6 +32,11 @@ func NewDynamoDBClients(ctx context.Context, cfg ClientConfig) (*DynamoDBClients
 		cfg.Region = "ap-southeast-1"
 	}
 
+	// Set default stream profile if not provided
+	if cfg.StreamProfile == "" {
+		cfg.StreamProfile = cfg.TargetProfile
+	}
+
 	sourceClient, err := NewDynamoDBClient(ctx, cfg.SourceProfile, cfg.Region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DynamoDB client for source profile: %w", err)
@@ -42,10 +48,10 @@ func NewDynamoDBClients(ctx context.Context, cfg ClientConfig) (*DynamoDBClients
 		return nil, fmt.Errorf("failed to create DynamoDB client for target profile: %w", err)
 	}
 
-	// Since stream is on the target (new) table, use target profile for stream client
-	streamClient, err := NewDynamoDBStreamClient(ctx, cfg.TargetProfile, cfg.Region)
+	// Use stream profile for stream client
+	streamClient, err := NewDynamoDBStreamClient(ctx, cfg.StreamProfile, cfg.Region)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create DynamoDB Stream client for target profile: %w", err)
+		return nil, fmt.Errorf("failed to create DynamoDB Stream client for stream profile: %w", err)
 	}
 
 	return &DynamoDBClients{

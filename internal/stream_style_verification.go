@@ -26,6 +26,9 @@ type StreamVerificationConfig struct {
 	SampleRate   int    // Validate 1 out of every SampleRate records
 	PartitionKey string // Name of the partition key
 	SortKey      string // Name of the sort key (optional)
+	IteratorType string // DynamoDB Stream Iterator Type
+	VerifyOn     string // Which table to verify against: source or target
+	Verbose      bool   // Whether to show success validation logs
 }
 
 // Stats tracks stream processing statistics
@@ -47,11 +50,23 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		cfg.SampleRate = 100 // Default: validate 1 out of every 100 records
 	}
 
-	// Using StreamSubscriberV2 to directly listen to DynamoDB Stream
-	subscriber := NewStreamSubscriberV2(cfg.TargetClient, cfg.StreamClient, cfg.TargetTable)
+	// Select client based on VerifyOn setting
+	verifiedClient := cfg.TargetClient // Default to target client
+	verifiedTable := cfg.TargetTable
+	if cfg.VerifyOn == "source" {
+		verifiedClient = cfg.SourceClient
+		// We still use the target table name since it's the same structure in both accounts
+	}
 
-	// Use TrimHorizon to read all events from the beginning (remove this line if you only want new events)
-	// subscriber.SetShardIteratorType(streamtypes.ShardIteratorTypeTrimHorizon)
+	// Using StreamSubscriberV2 to directly listen to DynamoDB Stream
+	subscriber := NewStreamSubscriberV2(verifiedClient, cfg.StreamClient, verifiedTable)
+
+	// Set iterator type based on configuration
+	if cfg.IteratorType == "TRIM_HORIZON" {
+		subscriber.SetShardIteratorType(streamtypes.ShardIteratorTypeTrimHorizon)
+	} else {
+		subscriber.SetShardIteratorType(streamtypes.ShardIteratorTypeLatest)
+	}
 
 	// To speed up reading, you can set the batch size
 	subscriber.SetLimit(100)
@@ -72,9 +87,9 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	// Function to verify data in old table
-	verifyInOldTable := func(ctx context.Context, partitionKeyValue, sortKeyValue string) bool {
-		// Create GetItem input for old table (using sourceClient)
+	// Function to verify data in table
+	verifyInTable := func(ctx context.Context, partitionKeyValue, sortKeyValue string) bool {
+		// Create GetItem input for table
 		keys := map[string]types.AttributeValue{
 			cfg.PartitionKey: &types.AttributeValueMemberS{Value: partitionKeyValue},
 		}
@@ -84,35 +99,47 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 			keys[cfg.SortKey] = &types.AttributeValueMemberS{Value: sortKeyValue}
 		}
 
+		// Select client and table based on VerifyOn setting
+		client := cfg.SourceClient
+		tableType := "source"
+		tableName := cfg.TargetTable // We use target table name for both directions as it should have same structure
+
+		if cfg.VerifyOn == "target" {
+			client = cfg.TargetClient
+			tableType = "target"
+		}
+
 		input := &dynamodb.GetItemInput{
-			TableName: aws.String(cfg.TargetTable),
+			TableName: aws.String(tableName),
 			Key:       keys,
 		}
 
-		// Query the old table
-		result, err := cfg.SourceClient.GetItem(ctx, input)
+		// Query the table
+		result, err := client.GetItem(ctx, input)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"partition_key": fmt.Sprintf("%s=%s", cfg.PartitionKey, partitionKeyValue),
 				"sort_key":      fmt.Sprintf("%s=%s", cfg.SortKey, sortKeyValue),
 				"error":         err,
-			}).Warn("[VALIDATION] Error querying old table")
+			}).Warn("[VALIDATION] Error querying " + tableType + " table")
 			return false
 		}
 
-		// Check if item exists in old table
+		// Check if item exists in table
 		exists := len(result.Item) > 0
 
 		if exists {
-			log.WithFields(log.Fields{
-				"partition_key": fmt.Sprintf("%s=%s", cfg.PartitionKey, partitionKeyValue),
-				"sort_key":      fmt.Sprintf("%s=%s", cfg.SortKey, sortKeyValue),
-			}).Info("[VALIDATION] SUCCESS: Item exists in source table ✅")
+			if cfg.Verbose {
+				log.WithFields(log.Fields{
+					"partition_key": fmt.Sprintf("%s=%s", cfg.PartitionKey, partitionKeyValue),
+					"sort_key":      fmt.Sprintf("%s=%s", cfg.SortKey, sortKeyValue),
+				}).Info("[VALIDATION] SUCCESS: Item exists in " + tableType + " table ✅")
+			}
 		} else {
 			log.WithFields(log.Fields{
 				"partition_key": fmt.Sprintf("%s=%s", cfg.PartitionKey, partitionKeyValue),
 				"sort_key":      fmt.Sprintf("%s=%s", cfg.SortKey, sortKeyValue),
-			}).Warn("[VALIDATION] FAILED: Item not found in source table ❌")
+			}).Warn("[VALIDATION] FAILED: Item not found in " + tableType + " table ❌")
 		}
 
 		return exists
@@ -188,11 +215,11 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 
 			// Validate if sampling conditions are met
 			if stats.TotalCount%cfg.SampleRate == 0 && partitionKeyValue != "" {
-				// Perform validation against the old table
+				// Perform validation against the table
 				stats.ValidationCount++
 
-				// Validate in old table
-				success := verifyInOldTable(ctx, partitionKeyValue, sortKeyValue)
+				// Validate in table
+				success := verifyInTable(ctx, partitionKeyValue, sortKeyValue)
 				if success {
 					stats.ValidationSuccess++
 				} else {
