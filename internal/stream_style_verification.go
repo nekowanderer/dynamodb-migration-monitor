@@ -29,6 +29,39 @@ type StreamVerificationConfig struct {
 	IteratorType string // DynamoDB Stream Iterator Type
 	VerifyOn     string // Which table to verify against: source or target
 	Verbose      bool   // Whether to show success validation logs
+
+	// Performance tuning parameters
+	ValidationConfig ValidationConfig
+}
+
+// ValidationConfig contains all the configuration for validation process
+type ValidationConfig struct {
+	BufferSize          int           // Size of validation buffer
+	ChannelSize         int           // Size of validation channel
+	ValidationInterval  time.Duration // How often to process validation buffer
+	ReplicationWaitTime time.Duration // How long to wait for data replication
+	RetryWaitTime       time.Duration // How long to wait before retry
+	BatchSize           int32         // Size of stream batch
+	StatsInterval       time.Duration // How often to show statistics
+}
+
+// DefaultValidationConfig returns the default validation configuration
+func DefaultValidationConfig() ValidationConfig {
+	return ValidationConfig{
+		BufferSize:          100,              // Default buffer size
+		ChannelSize:         10,               // Default channel size
+		ValidationInterval:  30 * time.Second, // Process buffer every 30 seconds
+		ReplicationWaitTime: 5 * time.Second,  // Wait 5 seconds for replication
+		RetryWaitTime:       2 * time.Second,  // Wait 2 seconds before retry
+		BatchSize:           100,              // Process 100 records per batch
+		StatsInterval:       30 * time.Second, // Show stats every 30 seconds
+	}
+}
+
+// ValidationRecord represents a record to be validated
+type ValidationRecord struct {
+	PartitionKeyValue string
+	SortKeyValue      string
 }
 
 // Stats tracks stream processing statistics
@@ -50,6 +83,11 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		cfg.SampleRate = 100 // Default: validate 1 out of every 100 records
 	}
 
+	// Set default validation config if not provided
+	if cfg.ValidationConfig.BufferSize == 0 {
+		cfg.ValidationConfig = DefaultValidationConfig()
+	}
+
 	// Select client based on VerifyOn setting
 	verifiedClient := cfg.TargetClient // Default to target client
 	verifiedTable := cfg.TargetTable
@@ -58,8 +96,8 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		// We still use the target table name since it's the same structure in both accounts
 	}
 
-	// Using StreamSubscriberV2 to directly listen to DynamoDB Stream
-	subscriber := NewStreamSubscriberV2(verifiedClient, cfg.StreamClient, verifiedTable)
+	// Using StreamSubscriberV2WithArn to directly listen to DynamoDB Stream
+	subscriber := NewStreamSubscriberV2WithArn(verifiedClient, cfg.StreamClient, verifiedTable, cfg.StreamArn)
 
 	// Set iterator type based on configuration
 	if cfg.IteratorType == "TRIM_HORIZON" {
@@ -68,8 +106,8 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		subscriber.SetShardIteratorType(streamtypes.ShardIteratorTypeLatest)
 	}
 
-	// To speed up reading, you can set the batch size
-	subscriber.SetLimit(100)
+	// Set batch size
+	subscriber.SetLimit(cfg.ValidationConfig.BatchSize)
 
 	recCh, errCh := subscriber.GetStreamDataAsync()
 
@@ -83,9 +121,17 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		EventIDs:  make(map[string]struct{}),
 	}
 
-	// Timer to display statistics every 30 seconds
-	ticker := time.NewTicker(30 * time.Second)
+	// Timer to display statistics
+	ticker := time.NewTicker(cfg.ValidationConfig.StatsInterval)
 	defer ticker.Stop()
+
+	// Buffer for validation records
+	validationBuffer := make([]ValidationRecord, 0, cfg.ValidationConfig.BufferSize)
+	validationTicker := time.NewTicker(cfg.ValidationConfig.ValidationInterval)
+	defer validationTicker.Stop()
+
+	// Channel for validation records
+	validationCh := make(chan []ValidationRecord, cfg.ValidationConfig.ChannelSize)
 
 	// Function to verify data in table
 	verifyInTable := func(ctx context.Context, partitionKeyValue, sortKeyValue string) bool {
@@ -144,6 +190,62 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 
 		return exists
 	}
+
+	// Function to process a batch of validation records
+	processValidationBatch := func(batch []ValidationRecord) {
+		log.Infof("[VALIDATION] Processing batch of %d records", len(batch))
+
+		// Wait for data replication
+		time.Sleep(cfg.ValidationConfig.ReplicationWaitTime)
+
+		for _, record := range batch {
+			stats.ValidationCount++
+
+			// First attempt
+			success := verifyInTable(ctx, record.PartitionKeyValue, record.SortKeyValue)
+
+			// If first attempt fails, wait and try again
+			if !success {
+				time.Sleep(cfg.ValidationConfig.RetryWaitTime)
+				success = verifyInTable(ctx, record.PartitionKeyValue, record.SortKeyValue)
+			}
+
+			if success {
+				stats.ValidationSuccess++
+			} else {
+				stats.ValidationFailed++
+			}
+		}
+	}
+
+	// Function to process validation buffer
+	processValidationBuffer := func() {
+		if len(validationBuffer) == 0 {
+			return
+		}
+
+		// Create a copy of the buffer
+		batch := make([]ValidationRecord, len(validationBuffer))
+		copy(batch, validationBuffer)
+
+		// Clear the buffer
+		validationBuffer = validationBuffer[:0]
+
+		// Send batch to validation channel
+		select {
+		case validationCh <- batch:
+		default:
+			// If channel is full, process in current goroutine
+			go processValidationBatch(batch)
+		}
+	}
+
+	// Start validation processor goroutine
+	go func() {
+		for batch := range validationCh {
+			processValidationBatch(batch)
+		}
+	}()
 
 	// Print statistics
 	printStats := func() {
@@ -213,30 +315,30 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 				"sort_key":      fmt.Sprintf("%s=%s", cfg.SortKey, sortKeyValue),
 			}).Info("[STREAM] Record received")
 
-			// Validate if sampling conditions are met
+			// Add to validation buffer if needed
 			if stats.TotalCount%cfg.SampleRate == 0 && partitionKeyValue != "" {
-				// Perform validation against the table
-				stats.ValidationCount++
-
-				// Validate in table
-				success := verifyInTable(ctx, partitionKeyValue, sortKeyValue)
-				if success {
-					stats.ValidationSuccess++
-				} else {
-					stats.ValidationFailed++
-				}
+				validationBuffer = append(validationBuffer, ValidationRecord{
+					PartitionKeyValue: partitionKeyValue,
+					SortKeyValue:      sortKeyValue,
+				})
 			}
+
+		case <-validationTicker.C:
+			processValidationBuffer()
+
 		case err := <-errCh:
 			log.Errorf("[STREAM] Error: %v", err)
 		case <-ticker.C:
 			printStats()
 		case <-c:
 			log.Info("Interrupt received, shutting down stream listener...")
-			printStats() // Show final statistics before exiting
+			processValidationBuffer() // Process any remaining records
+			printStats()              // Show final statistics before exiting
 			return
 		case <-ctx.Done():
 			log.Info("Context canceled, shutting down stream listener...")
-			printStats() // Show final statistics before exiting
+			processValidationBuffer() // Process any remaining records
+			printStats()              // Show final statistics before exiting
 			return
 		}
 	}

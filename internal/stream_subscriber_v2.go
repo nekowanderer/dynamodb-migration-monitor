@@ -30,11 +30,13 @@ type StreamSubscriberV2 struct {
 	dynamoSvc *dynamodb.Client
 	streamSvc *dynamodbstreams.Client
 	table     string
+	streamArn string // Optional direct stream ARN
 
 	ShardIteratorType stypes.ShardIteratorType
 	Limit             *int32
 }
 
+// NewStreamSubscriberV2 creates a new StreamSubscriberV2 instance
 func NewStreamSubscriberV2(
 	dynamoSvc *dynamodb.Client,
 	streamSvc *dynamodbstreams.Client,
@@ -49,8 +51,25 @@ func NewStreamSubscriberV2(
 	return s
 }
 
+// NewStreamSubscriberV2WithArn creates a new StreamSubscriberV2 instance with a specific stream ARN
+func NewStreamSubscriberV2WithArn(
+	dynamoSvc *dynamodb.Client,
+	streamSvc *dynamodbstreams.Client,
+	table, streamArn string,
+) *StreamSubscriberV2 {
+	s := &StreamSubscriberV2{
+		dynamoSvc: dynamoSvc,
+		streamSvc: streamSvc,
+		table:     table,
+		streamArn: streamArn,
+	}
+	s.applyDefaults()
+	return s
+}
+
 func (s *StreamSubscriberV2) applyDefaults() {
 	if s.ShardIteratorType == "" {
+		// s.ShardIteratorType = stypes.ShardIteratorTypeLatest
 		s.ShardIteratorType = stypes.ShardIteratorTypeLatest
 	}
 }
@@ -61,6 +80,11 @@ func (s *StreamSubscriberV2) SetLimit(v int32) {
 
 func (s *StreamSubscriberV2) SetShardIteratorType(t stypes.ShardIteratorType) {
 	s.ShardIteratorType = t
+}
+
+// SetStreamArn sets the explicit stream ARN to use
+func (s *StreamSubscriberV2) SetStreamArn(arn string) {
+	s.streamArn = arn
 }
 
 // GetStreamData follows the same logic as the original implementation:
@@ -217,6 +241,12 @@ func (s *StreamSubscriberV2) findProperShardID(ctx context.Context, prevShardID 
 }
 
 func (s *StreamSubscriberV2) getLatestStreamArn(ctx context.Context) (*string, error) {
+	// If an explicit stream ARN is provided, use it
+	if s.streamArn != "" {
+		return aws.String(s.streamArn), nil
+	}
+
+	// Otherwise, try to get it from the table
 	out, err := s.dynamoSvc.DescribeTable(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(s.table)})
 	if err != nil {
 		return nil, err

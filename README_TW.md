@@ -167,20 +167,19 @@ go build
 
 ### 參數說明
 
-必要參數：
-- `--source-profile`：來源 AWS profile 名稱，用於存取來源表格
-- `--target-profile`：目標 AWS profile 名稱，用於存取目標表格
-- `--stream-arn`：目標表格的 Stream ARN，用於監控資料變更
-- `--target-table`：目標表格名稱，即要驗證的目標表格
-- `--partition-key`：分區鍵名稱，用於資料查詢和比對
-
-選填參數：
-- `--stream-profile`：Stream AWS profile 名稱（預設使用來源 profile）。如果 Stream 存取需要不同的權限設定，可以指定專用的 profile
-- `--sort-key`：排序鍵名稱（如果表格有的話）。用於複合主鍵的情況
-- `--region`：AWS Region（預設：ap-northeast-1）。指定要操作的 AWS 區域
-- `--sample-rate`：驗證抽樣率（預設：100）。可以降低以減少成本，詳見抽樣率說明章節
-- `--verify-on`：指定要驗證的表格：source 或 target（預設：source）。決定驗證的方向
-- `--verbose`：顯示成功驗證的日誌（預設：false）。開啟後可以看到所有驗證細節，但可能會有大量輸出
+| 參數 | 必填 | 預設值 | 說明 | 可能的值 |
+|------|------|--------|------|----------|
+| `--source-profile` | 是 | - | 來源 AWS profile 名稱，用於存取來源表格 | 任何已設定的 AWS profile |
+| `--target-profile` | 是 | - | 目標 AWS profile 名稱，用於存取目標表格 | 任何已設定的 AWS profile |
+| `--stream-arn` | 是 | - | 目標表格的 Stream ARN，用於監控資料變更 | 例如："arn:aws:dynamodb:region:account:table/name/stream/time" |
+| `--target-table` | 是 | - | 目標表格名稱，即要驗證的目標表格 | 任何 DynamoDB 表格名稱 |
+| `--partition-key` | 是 | - | 分區鍵名稱，用於資料查詢和比對 | 任何有效的分區鍵名稱 |
+| `--stream-profile` | 否 | 同 source-profile | Stream AWS profile 名稱。如果 Stream 存取需要不同的權限設定，可以指定專用的 profile | 任何已設定的 AWS profile |
+| `--sort-key` | 否 | - | 排序鍵名稱（如果表格有的話）。用於複合主鍵的情況 | 任何有效的排序鍵名稱 |
+| `--region` | 否 | ap-northeast-1 | AWS Region。指定要操作的 AWS 區域 | 任何有效的 AWS 區域 |
+| `--sample-rate` | 否 | 100 | 驗證抽樣率。可以降低以減少成本 | 任何正整數 |
+| `--verify-on` | 否 | source | 指定要驗證的表格：source 或 target | "source", "target" |
+| `--verbose` | 否 | false | 顯示成功驗證的日誌。開啟後可以看到所有驗證細節，但可能會有大量輸出 | true, false |
 
 ## 關於抽樣率和統計可信度
 
@@ -195,6 +194,65 @@ go build
 
 綜合而言，1% 抽樣在成本效益與準確性之間取得了極佳平衡；若驗證過程發現異常，可隨時提高抽樣率以進一步深入分析。
 
+### Stream Style Verification
+
+基於 Stream 的驗證模式會在資料遷移過程中即時監控 DynamoDB Streams。它包含了幾個重要的功能來處理最終一致性和資料複寫延遲：
+
+#### 驗證流程
+
+1. **批次處理**
+   - 記錄會被收集在緩衝區中（預設大小：100）
+   - 以批次方式處理以減少 API 呼叫
+   - 可透過環境變數設定批次大小
+
+2. **複寫延遲處理**
+   - 等待資料複寫完成（預設：5 秒）
+   - 確保資料在目標表格中可用
+   - 協助處理 DynamoDB 的最終一致性
+
+3. **重試機制**
+   - 對失敗的驗證實作自動重試
+   - 重試之間等待（預設：2 秒）
+   - 協助處理暫時性的複寫延遲
+
+4. **非同步處理**
+   - 使用通道進行並行驗證
+   - 防止阻塞主要的串流處理
+   - 可配置的通道大小（預設：10）
+
+#### 配置參數
+
+以下環境變數可用於調整驗證流程：
+
+| 環境變數 | 預設值 | 說明 |
+|----------|--------|------|
+| `DDB_VALIDATION_BUFFER_SIZE` | 100 | 驗證緩衝區大小 |
+| `DDB_VALIDATION_CHANNEL_SIZE` | 10 | 驗證通道大小 |
+| `DDB_VALIDATION_INTERVAL` | 30s | 處理驗證緩衝區的間隔 |
+| `DDB_REPLICATION_WAIT_TIME` | 5s | 等待資料複寫的時間 |
+| `DDB_RETRY_WAIT_TIME` | 2s | 重試前的等待時間 |
+| `DDB_BATCH_SIZE` | 100 | 串流批次大小 |
+| `DDB_STATS_INTERVAL` | 30s | 顯示統計資訊的間隔 |
+
+#### 為什麼需要這些功能？
+
+在進行大規模遷移（數千萬筆資料）時，我們觀察到：
+
+1. **最終一致性**
+   - DynamoDB 的最終一致性模型意味著資料複寫有固有的延遲
+   - 來源表格的變更可能不會立即在目標表格中可見
+   - 在高吞吐量的遷移中特別明顯
+
+2. **複寫延遲**
+   - 來源表格的變更需要時間才會出現在目標表格中
+   - 簡單的立即驗證會產生誤判
+   - 批次處理配合等待時間可以處理這些延遲
+
+3. **效能考量**
+   - 批次處理減少 API 呼叫
+   - 非同步驗證防止阻塞
+   - 可配置的參數允許針對不同場景進行調整
+
 ## 監控輸出
 
 程式會每 30 秒顯示一次統計資訊，包含：
@@ -202,6 +260,136 @@ go build
 - INSERT 和 MODIFY 操作的數量
 - 每秒平均事件數
 - 驗證成功率
+
+## 架構與 IAM 設定
+
+### 跨帳號存取架構
+
+本工具可以在 EC2 執行個體上運行，使用專用的 IAM 角色來存取來源和目標帳號的資源。以下是架構圖：
+
+```
++------------------------------------------------------+
+|                                                      |
+|  EC2 (with temp-ddb-migration-role)                  |
+|  +------------------------------------------+        |
+|  |                                          |        |
+|  |                  驗證腳本                 |        |
+|  |                                          |        |
+|  +------------------------------------------+        |
+|          |                     |                     |
+|          | 讀取                 | 驗證                |
+|          | Stream              | 目標                 |
+|          ↓                     ↓                     |
++------------------------------------------------------+
+          |                     |
+          |                     |
+          |                     |
+          |                     |
+          ↓                     ↓
++-------------------+  +-------------------+
+|                   |  |                   |
+|      來源帳號      |  |     目標帳號        |
+| (paul-leishman-qa)|  |   (codashop-qa)   |
+| 169579254xxx      |  |   042913693xxx    |
+|                   |  |                   |
+| +---------------+ |  | +---------------+ |
+| |               | |  | |               | |
+| | DynamoDB      | |  | | DynamoDB      | |
+| | Stream        | |  | | 表格           | |
+| |               | |  | |               | |
+| +---------------+ |  | +---------------+ |
+|                   |  |                   |
++-------------------+  +-------------------+
+```
+
+### 資料流程
+
+1. 腳本從來源帳號的 DynamoDB Stream 讀取記錄
+2. 對每個串流記錄，腳本查詢目標帳號的表格
+3. 驗證記錄是否正確遷移到目標表格
+4. EC2 角色需要權限來存取兩個帳號的資源
+
+### 必要的 IAM 權限
+
+#### 1. EC2 執行個體角色 (temp-ddb-migration-role)
+
+此角色需要權限來讀取來源串流和目標表格：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodbstreams:DescribeStream",
+        "dynamodbstreams:GetRecords",
+        "dynamodbstreams:GetShardIterator",
+        "dynamodbstreams:ListStreams"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+    }
+  ]
+}
+```
+
+#### 2. 來源帳號 (paul-leishman-qa, 169579254xxx)
+
+需要允許遷移角色存取串流：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::042913693xxx:role/temp-ddb-migration-role"
+      },
+      "Action": [
+        "dynamodbstreams:DescribeStream",
+        "dynamodbstreams:GetRecords",
+        "dynamodbstreams:GetShardIterator",
+        "dynamodbstreams:ListStreams"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+    }
+  ]
+}
+```
+
+#### 3. 目標帳號 (codashop-qa, 042913693xxx)
+
+需要允許遷移角色存取表格：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::042913693xxx:role/temp-ddb-migration-role"
+      },
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+    }
+  ]
+}
+```
 
 ## 注意事項
 
@@ -250,4 +438,4 @@ go build
 
 ## 授權條款
 
-本專案使用 Apache License 2.0 授權 - 詳見 [LICENSE](LICENSE) 檔案。 
+本專案使用 Apache License 2.0 授權 - 詳見 [LICENSE](LICENSE) 檔案。
