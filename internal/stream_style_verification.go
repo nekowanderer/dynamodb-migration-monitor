@@ -29,6 +29,33 @@ type StreamVerificationConfig struct {
 	IteratorType string // DynamoDB Stream Iterator Type
 	VerifyOn     string // Which table to verify against: source or target
 	Verbose      bool   // Whether to show success validation logs
+
+	// Performance tuning parameters
+	ValidationConfig ValidationConfig
+}
+
+// ValidationConfig contains all the configuration for validation process
+type ValidationConfig struct {
+	BufferSize          int           // Size of validation buffer
+	ChannelSize         int           // Size of validation channel
+	ValidationInterval  time.Duration // How often to process validation buffer
+	ReplicationWaitTime time.Duration // How long to wait for data replication
+	RetryWaitTime       time.Duration // How long to wait before retry
+	BatchSize           int32         // Size of stream batch
+	StatsInterval       time.Duration // How often to show statistics
+}
+
+// DefaultValidationConfig returns the default validation configuration
+func DefaultValidationConfig() ValidationConfig {
+	return ValidationConfig{
+		BufferSize:          100,              // Default buffer size
+		ChannelSize:         10,               // Default channel size
+		ValidationInterval:  30 * time.Second, // Process buffer every 30 seconds
+		ReplicationWaitTime: 5 * time.Second,  // Wait 5 seconds for replication
+		RetryWaitTime:       2 * time.Second,  // Wait 2 seconds before retry
+		BatchSize:           100,              // Process 100 records per batch
+		StatsInterval:       30 * time.Second, // Show stats every 30 seconds
+	}
 }
 
 // ValidationRecord represents a record to be validated
@@ -56,6 +83,11 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		cfg.SampleRate = 100 // Default: validate 1 out of every 100 records
 	}
 
+	// Set default validation config if not provided
+	if cfg.ValidationConfig.BufferSize == 0 {
+		cfg.ValidationConfig = DefaultValidationConfig()
+	}
+
 	// Select client based on VerifyOn setting
 	verifiedClient := cfg.TargetClient // Default to target client
 	verifiedTable := cfg.TargetTable
@@ -74,8 +106,8 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		subscriber.SetShardIteratorType(streamtypes.ShardIteratorTypeLatest)
 	}
 
-	// To speed up reading, you can set the batch size
-	subscriber.SetLimit(100)
+	// Set batch size
+	subscriber.SetLimit(cfg.ValidationConfig.BatchSize)
 
 	recCh, errCh := subscriber.GetStreamDataAsync()
 
@@ -89,17 +121,17 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		EventIDs:  make(map[string]struct{}),
 	}
 
-	// Timer to display statistics every 30 seconds
-	ticker := time.NewTicker(30 * time.Second)
+	// Timer to display statistics
+	ticker := time.NewTicker(cfg.ValidationConfig.StatsInterval)
 	defer ticker.Stop()
 
 	// Buffer for validation records
-	validationBuffer := make([]ValidationRecord, 0)
-	validationTicker := time.NewTicker(30 * time.Second)
+	validationBuffer := make([]ValidationRecord, 0, cfg.ValidationConfig.BufferSize)
+	validationTicker := time.NewTicker(cfg.ValidationConfig.ValidationInterval)
 	defer validationTicker.Stop()
 
 	// Channel for validation records
-	validationCh := make(chan []ValidationRecord, 10)
+	validationCh := make(chan []ValidationRecord, cfg.ValidationConfig.ChannelSize)
 
 	// Function to verify data in table
 	verifyInTable := func(ctx context.Context, partitionKeyValue, sortKeyValue string) bool {
@@ -164,7 +196,7 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 		log.Infof("[VALIDATION] Processing batch of %d records", len(batch))
 
 		// Wait for data replication
-		time.Sleep(5 * time.Second)
+		time.Sleep(cfg.ValidationConfig.ReplicationWaitTime)
 
 		for _, record := range batch {
 			stats.ValidationCount++
@@ -172,9 +204,9 @@ func RunStreamStyleVerification(ctx context.Context, cfg *StreamVerificationConf
 			// First attempt
 			success := verifyInTable(ctx, record.PartitionKeyValue, record.SortKeyValue)
 
-			// If first attempt fails, wait 2 seconds and try again
+			// If first attempt fails, wait and try again
 			if !success {
-				time.Sleep(2 * time.Second)
+				time.Sleep(cfg.ValidationConfig.RetryWaitTime)
 				success = verifyInTable(ctx, record.PartitionKeyValue, record.SortKeyValue)
 			}
 

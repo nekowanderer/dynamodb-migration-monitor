@@ -168,20 +168,19 @@ go build
 
 ### Parameters
 
-Required:
-- `--source-profile`: Source AWS profile name, used for accessing source table
-- `--target-profile`: Target AWS profile name, used for accessing target table
-- `--stream-arn`: Target table's Stream ARN, used for monitoring data changes
-- `--target-table`: Target table name, the table to validate against
-- `--partition-key`: Partition key name, used for data querying and comparison
-
-Optional:
-- `--stream-profile`: Stream AWS profile name (defaults to source profile). Use a dedicated profile if Stream access requires different permissions
-- `--sort-key`: Sort key name (if table has one). Used for composite primary keys
-- `--region`: AWS Region (default: ap-northeast-1). Specifies the AWS region to operate in
-- `--sample-rate`: Validation sampling rate (default: 100). Can be reduced to lower costs, see sampling rate section for details
-- `--verify-on`: Which table to verify against: source or target (default: source). Determines validation direction
-- `--verbose`: Show success validation logs (default: false). When enabled, shows all validation details but may produce large output
+| Parameter | Required | Default Value | Description | Possible Values |
+|-----------|----------|--------------|-------------|----------------|
+| `--source-profile` | Yes | - | Source AWS profile name, used for accessing source table | Any configured AWS profile |
+| `--target-profile` | Yes | - | Target AWS profile name, used for accessing target table | Any configured AWS profile |
+| `--stream-arn` | Yes | - | Target table's Stream ARN, used for monitoring data changes | e.g. "arn:aws:dynamodb:region:account:table/name/stream/time" |
+| `--target-table` | Yes | - | Target table name, the table to validate against | Any DynamoDB table name |
+| `--partition-key` | Yes | - | Partition key name, used for data querying and comparison | Any valid partition key name |
+| `--stream-profile` | No | Same as source-profile | Stream AWS profile name. Use a dedicated profile if Stream access requires different permissions | Any configured AWS profile |
+| `--sort-key` | No | - | Sort key name (if table has one). Used for composite primary keys | Any valid sort key name |
+| `--region` | No | ap-northeast-1 | AWS Region. Specifies the AWS region to operate in | Any valid AWS region |
+| `--sample-rate` | No | 100 | Validation sampling rate. Can be reduced to lower costs | Any positive integer |
+| `--verify-on` | No | source | Which table to verify against: source or target | "source", "target" |
+| `--verbose` | No | false | Show success validation logs. When enabled, shows all validation details but may produce large output | true, false |
 
 ## About Sampling Rate and Statistical Confidence
 
@@ -195,6 +194,65 @@ Even a **1% sampling rate** is statistically powerful for datasets of this magni
 | Practical Considerations | Migration defects tend to be **systematic**, not random. Systematic issues will surface even at low sampling rates. If 1% passes, the likelihood of hidden systemic problems is extremely small. |
 
 In short, a 1% sample offers an excellent balance between cost and accuracy. You can always increase the sampling rate if deeper inspection is required.
+
+### Stream Style Verification
+
+The stream-based validation mode monitors DynamoDB Streams in real-time during data migration. It includes several important features to handle eventual consistency and data replication delays:
+
+#### Validation Process
+
+1. **Batch Processing**
+   - Records are collected in a buffer (default size: 100)
+   - Processed in batches to reduce API calls
+   - Configurable batch size through environment variables
+
+2. **Replication Delay Handling**
+   - Waits for data replication (default: 5 seconds)
+   - Ensures data is available in the target table
+   - Helps handle eventual consistency in DynamoDB
+
+3. **Retry Mechanism**
+   - Implements automatic retry for failed validations
+   - Waits between retries (default: 2 seconds)
+   - Helps handle temporary replication delays
+
+4. **Asynchronous Processing**
+   - Uses channels for concurrent validation
+   - Prevents blocking the main stream processing
+   - Configurable channel size (default: 10)
+
+#### Configuration Parameters
+
+The following environment variables can be used to tune the validation process:
+
+| Environment Variable | Default Value | Description |
+|---------------------|---------------|-------------|
+| `DDB_VALIDATION_BUFFER_SIZE` | 100 | Size of the validation buffer |
+| `DDB_VALIDATION_CHANNEL_SIZE` | 10 | Size of the validation channel |
+| `DDB_VALIDATION_INTERVAL` | 30s | How often to process the validation buffer |
+| `DDB_REPLICATION_WAIT_TIME` | 5s | How long to wait for data replication |
+| `DDB_RETRY_WAIT_TIME` | 2s | How long to wait before retry |
+| `DDB_BATCH_SIZE` | 100 | Size of stream batch |
+| `DDB_STATS_INTERVAL` | 30s | How often to show statistics |
+
+#### Why These Features?
+
+During large-scale migrations (millions of records), we observed that:
+
+1. **Eventual Consistency**
+   - DynamoDB's eventual consistency model means data replication has inherent delays
+   - Source table changes may not be immediately visible in the target table
+   - This is especially noticeable during high-throughput migrations
+
+2. **Replication Delays**
+   - Changes from source table take time to appear in target table
+   - Simple immediate validation would show false negatives
+   - Batch processing with wait times helps handle these delays
+
+3. **Performance Considerations**
+   - Batch processing reduces API calls
+   - Asynchronous validation prevents blocking
+   - Configurable parameters allow tuning for different scenarios
 
 ## Monitoring Output
 
