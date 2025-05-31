@@ -262,6 +262,136 @@ Statistics are displayed every 30 seconds, including:
 - Average events per second
 - Validation success rate
 
+## Architecture and IAM Setup
+
+### Cross-Account Access Architecture
+
+The tool can be run from an EC2 instance with a dedicated IAM role to access resources in both source and target accounts. Here's the architecture:
+
+```
++------------------------------------------------------+
+|                                                      |
+|  EC2 (with temp-ddb-migration-role)                  |
+|  +------------------------------------------+        |
+|  |                                          |        |
+|  |          Validation Script               |        |
+|  |                                          |        |
+|  +------------------------------------------+        |
+|          |                     |                     |
+|          | Read                | Verify              |
+|          | Stream              | Target              |
+|          ↓                     ↓                     |
++------------------------------------------------------+
+          |                     |
+          |                     |
+          |                     |
+          |                     |
+          ↓                     ↓
++-------------------+  +-------------------+
+|                   |  |                   |
+| Source Account    |  | Target Account    |
+| (paul-leishman-qa)|  | (codashop-qa)     |
+| 169579254xxx      |  | 042913693xxx      |
+|                   |  |                   |
+| +---------------+ |  | +---------------+ |
+| |               | |  | |               | |
+| | DynamoDB      | |  | | DynamoDB      | |
+| | Stream        | |  | | Table         | |
+| |               | |  | |               | |
+| +---------------+ |  | +---------------+ |
+|                   |  |                   |
++-------------------+  +-------------------+
+```
+
+### Data Flow
+
+1. Script reads records from Source account's DynamoDB Stream
+2. For each stream record, script queries the Target account's table
+3. Validates if records are correctly migrated to target table
+4. EC2 role needs permissions to access resources in both accounts
+
+### Required IAM Permissions
+
+#### 1. EC2 Instance Role (temp-ddb-migration-role)
+
+This role needs permissions to read both the source stream and target table:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodbstreams:DescribeStream",
+        "dynamodbstreams:GetRecords",
+        "dynamodbstreams:GetShardIterator",
+        "dynamodbstreams:ListStreams"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+    }
+  ]
+}
+```
+
+#### 2. Source Account (paul-leishman-qa, 169579254xxx)
+
+Needs to allow access from the migration role for reading the stream:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::042913693xxx:role/temp-ddb-migration-role"
+      },
+      "Action": [
+        "dynamodbstreams:DescribeStream",
+        "dynamodbstreams:GetRecords",
+        "dynamodbstreams:GetShardIterator",
+        "dynamodbstreams:ListStreams"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+    }
+  ]
+}
+```
+
+#### 3. Target Account (codashop-qa, 042913693xxx)
+
+Needs to allow access from the migration role for reading the table:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::042913693xxx:role/temp-ddb-migration-role"
+      },
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+    }
+  ]
+}
+```
+
 ## Prerequisites and Notes
 
 1. AWS CLI Setup:

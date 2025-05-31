@@ -261,6 +261,136 @@ go build
 - 每秒平均事件數
 - 驗證成功率
 
+## 架構與 IAM 設定
+
+### 跨帳號存取架構
+
+本工具可以在 EC2 執行個體上運行，使用專用的 IAM 角色來存取來源和目標帳號的資源。以下是架構圖：
+
+```
++------------------------------------------------------+
+|                                                      |
+|  EC2 (with temp-ddb-migration-role)                  |
+|  +------------------------------------------+        |
+|  |                                          |        |
+|  |                  驗證腳本                 |        |
+|  |                                          |        |
+|  +------------------------------------------+        |
+|          |                     |                     |
+|          | 讀取                 | 驗證                |
+|          | Stream              | 目標                 |
+|          ↓                     ↓                     |
++------------------------------------------------------+
+          |                     |
+          |                     |
+          |                     |
+          |                     |
+          ↓                     ↓
++-------------------+  +-------------------+
+|                   |  |                   |
+|      來源帳號      |  |     目標帳號        |
+| (paul-leishman-qa)|  |   (codashop-qa)   |
+| 169579254xxx      |  |   042913693xxx    |
+|                   |  |                   |
+| +---------------+ |  | +---------------+ |
+| |               | |  | |               | |
+| | DynamoDB      | |  | | DynamoDB      | |
+| | Stream        | |  | | 表格           | |
+| |               | |  | |               | |
+| +---------------+ |  | +---------------+ |
+|                   |  |                   |
++-------------------+  +-------------------+
+```
+
+### 資料流程
+
+1. 腳本從來源帳號的 DynamoDB Stream 讀取記錄
+2. 對每個串流記錄，腳本查詢目標帳號的表格
+3. 驗證記錄是否正確遷移到目標表格
+4. EC2 角色需要權限來存取兩個帳號的資源
+
+### 必要的 IAM 權限
+
+#### 1. EC2 執行個體角色 (temp-ddb-migration-role)
+
+此角色需要權限來讀取來源串流和目標表格：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodbstreams:DescribeStream",
+        "dynamodbstreams:GetRecords",
+        "dynamodbstreams:GetShardIterator",
+        "dynamodbstreams:ListStreams"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+    }
+  ]
+}
+```
+
+#### 2. 來源帳號 (paul-leishman-qa, 169579254xxx)
+
+需要允許遷移角色存取串流：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::042913693xxx:role/temp-ddb-migration-role"
+      },
+      "Action": [
+        "dynamodbstreams:DescribeStream",
+        "dynamodbstreams:GetRecords",
+        "dynamodbstreams:GetShardIterator",
+        "dynamodbstreams:ListStreams"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+    }
+  ]
+}
+```
+
+#### 3. 目標帳號 (codashop-qa, 042913693xxx)
+
+需要允許遷移角色存取表格：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::042913693xxx:role/temp-ddb-migration-role"
+      },
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+    }
+  ]
+}
+```
+
 ## 注意事項
 
 1. AWS CLI 設定：
