@@ -69,11 +69,11 @@ T4: Data validation complete, confirming all data is correctly migrated
 
 ```
 Source Table ──── S3 Export ────┐
-     │                         │
-     │                         v
+     │                          │
+     │                          v
      │                   Target Table (S3 Import)
-     │                         │
-     └──── Stream ────────────┘
+     │                          │
+     └──── Stream ──────────────┘
            (Real-time Replication)
 ```
 
@@ -163,6 +163,7 @@ go build
   --region ap-northeast-1 \
   --sample-rate 50 \
   --verify-on source \
+  --iterator-type TRIM_HORIZON \
   --verbose
 ```
 
@@ -180,6 +181,7 @@ go build
 | `--region` | No | ap-northeast-1 | AWS Region. Specifies the AWS region to operate in | Any valid AWS region |
 | `--sample-rate` | No | 100 | Validation sampling rate. Can be reduced to lower costs | Any positive integer |
 | `--verify-on` | No | source | Which table to verify against: source or target | "source", "target" |
+| `--iterator-type` | No | LATEST | DynamoDB Stream Iterator Type. LATEST starts from the latest record, TRIM_HORIZON starts from the oldest record | "LATEST", "TRIM_HORIZON" |
 | `--verbose` | No | false | Show success validation logs. When enabled, shows all validation details but may produce large output | true, false |
 
 ## About Sampling Rate and Statistical Confidence

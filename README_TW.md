@@ -162,6 +162,7 @@ go build
   --region ap-northeast-1 \
   --sample-rate 50 \
   --verify-on source \
+  --iterator-type TRIM_HORIZON \
   --verbose
 ```
 
@@ -179,6 +180,7 @@ go build
 | `--region` | 否 | ap-northeast-1 | AWS Region。指定要操作的 AWS 區域 | 任何有效的 AWS 區域 |
 | `--sample-rate` | 否 | 100 | 驗證抽樣率。可以降低以減少成本 | 任何正整數 |
 | `--verify-on` | 否 | source | 指定要驗證的表格：source 或 target | "source", "target" |
+| `--iterator-type` | 否 | LATEST | DynamoDB Stream 迭代器類型。LATEST 從最新的記錄開始，TRIM_HORIZON 從最舊的記錄開始 | "LATEST", "TRIM_HORIZON" |
 | `--verbose` | 否 | false | 顯示成功驗證的日誌。開啟後可以看到所有驗證細節，但可能會有大量輸出 | true, false |
 
 ## 關於抽樣率和統計可信度
