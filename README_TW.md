@@ -291,7 +291,7 @@ go build
 +-------------------+  +-------------------+
 |                   |  |                   |
 |      來源帳號      |  |     目標帳號        |
-| (paul-leishman-qa)|  |   (codashop-qa)   |
+| (old-account)     |  |   (new-account)   |
 | 169579254xxx      |  |   042913693xxx    |
 |                   |  |                   |
 | +---------------+ |  | +---------------+ |
@@ -328,7 +328,7 @@ go build
         "dynamodb:Query",
         "dynamodb:Scan"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/my-table"
     },
     {
       "Effect": "Allow",
@@ -338,13 +338,13 @@ go build
         "dynamodbstreams:GetShardIterator",
         "dynamodbstreams:ListStreams"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/my-table/stream/*"
     }
   ]
 }
 ```
 
-#### 2. 來源帳號 (paul-leishman-qa, 169579254xxx)
+#### 2. 來源帳號 (old-account, 169579254xxx)
 
 需要允許遷移角色存取串流：
 
@@ -363,13 +363,13 @@ go build
         "dynamodbstreams:GetShardIterator",
         "dynamodbstreams:ListStreams"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/my-table/stream/*"
     }
   ]
 }
 ```
 
-#### 3. 目標帳號 (codashop-qa, 042913693xxx)
+#### 3. 目標帳號 (new-account, 042913693xxx)
 
 需要允許遷移角色存取表格：
 
@@ -387,7 +387,7 @@ go build
         "dynamodb:Query",
         "dynamodb:Scan"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/my-table"
     }
   ]
 }

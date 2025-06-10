@@ -292,7 +292,7 @@ The tool can be run from an EC2 instance with a dedicated IAM role to access res
 +-------------------+  +-------------------+
 |                   |  |                   |
 | Source Account    |  | Target Account    |
-| (paul-leishman-qa)|  | (codashop-qa)     |
+| (old-account)     |  | (new-account)     |
 | 169579254xxx      |  | 042913693xxx      |
 |                   |  |                   |
 | +---------------+ |  | +---------------+ |
@@ -329,7 +329,7 @@ This role needs permissions to read both the source stream and target table:
         "dynamodb:Query",
         "dynamodb:Scan"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/my-table"
     },
     {
       "Effect": "Allow",
@@ -339,13 +339,13 @@ This role needs permissions to read both the source stream and target table:
         "dynamodbstreams:GetShardIterator",
         "dynamodbstreams:ListStreams"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/my-table/stream/*"
     }
   ]
 }
 ```
 
-#### 2. Source Account (paul-leishman-qa, 169579254xxx)
+#### 2. Source Account (old-account, 169579254xxx)
 
 Needs to allow access from the migration role for reading the stream:
 
@@ -364,13 +364,13 @@ Needs to allow access from the migration role for reading the stream:
         "dynamodbstreams:GetShardIterator",
         "dynamodbstreams:ListStreams"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/staging-codashop-userdetails/stream/*"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:169579254xxx:table/my-table/stream/*"
     }
   ]
 }
 ```
 
-#### 3. Target Account (codashop-qa, 042913693xxx)
+#### 3. Target Account (new-account, 042913693xxx)
 
 Needs to allow access from the migration role for reading the table:
 
@@ -388,7 +388,7 @@ Needs to allow access from the migration role for reading the table:
         "dynamodb:Query",
         "dynamodb:Scan"
       ],
-      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/staging-codashop-userdetails"
+      "Resource": "arn:aws:dynamodb:ap-southeast-1:042913693xxx:table/my-table"
     }
   ]
 }
